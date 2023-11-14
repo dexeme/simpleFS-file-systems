@@ -2,6 +2,7 @@
 #define FS_H
 
 #include "disk.h"
+#include <vector>
 
 class INE5412_FS
 {
@@ -54,6 +55,8 @@ public:
 
 private:
     Disk *disk;
+    bool mounted = false;
+    //std::vector<int> bitmap;
 };
 
 #endif

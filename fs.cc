@@ -3,11 +3,10 @@
 
 int INE5412_FS::fs_format()
 {
-	// Se o disco já foi montado não pode formatar, retorna falha
-	// TODO: Avaliar se isso está bom, e pensar em outros casos de falha
-	if (disk->size() > 0) {
+	// TODO: Se o disco já foi montado não pode formatar, retorna falha
+	/* if (mounted) {
 		return 0;
-	}
+	} */
 
 	union fs_block block;
 
@@ -20,20 +19,11 @@ int INE5412_FS::fs_format()
 	// Escreve o superbloco
 	disk->write(0, block.data);
 
-	// Libera a tabela de inodos
-	for (int i = 1; i <= block.super.ninodeblocks; i++) {
-		for (int j = 0; j < INODES_PER_BLOCK; j++) {
-			block.inode[j].isvalid = 0;
-		}
-		disk->write(i, block.data);
-	}
-
-	// Nulifica os ponteiros dos blocos de dados
-	for (int i = block.super.ninodeblocks + 1; i < block.super.nblocks; i++) {
+	// Zera o resto do disco
+	for (int i = 1; i < block.super.nblocks; i++) {
 		for (int j = 0; j < POINTERS_PER_BLOCK; j++) {
 			block.pointers[j] = 0;
 		}
-		disk->write(i, block.data);
 	}
 
 	return 1;
@@ -84,7 +74,65 @@ void INE5412_FS::fs_debug()
 
 int INE5412_FS::fs_mount()
 {
-	return 0;
+	/* if (mounted) {
+		return 0;
+	}
+ */
+	union fs_block block;
+
+	disk->read(0, block.data);
+
+	if (block.super.magic != FS_MAGIC) return 0;
+	if (block.super.nblocks != disk->size()) return 0;
+	if (block.super.ninodeblocks != ceil(block.super.nblocks * 0.1)) return 0;
+	if (block.super.ninodes != block.super.ninodeblocks * INODES_PER_BLOCK) return 0;
+	cout << "before bitmap\n";
+	
+	std::vector<int> bitmap = std::vector<int>(block.super.nblocks, 0);
+	cout << "after bitmap\n";
+	cout << bitmap.at(0);
+	cout << "after bitmap[0]\n";
+	fs_superblock super = block.super;
+
+	// Marca os blocos ocupados pelos inodes como ocupados
+	for (int i = 1; i <= super.ninodeblocks; i++) {
+		disk->read(i, block.data);
+		cout << "inode block " << i << ":\n";
+		for (int j = 0; j < INODES_PER_BLOCK; j++) {
+			if (block.inode[j].isvalid) {
+				bitmap[i] = 1;
+
+				for (int k = 0; k < POINTERS_PER_INODE; k++) {
+					if (block.inode[j].direct[k] >= super.nblocks) {
+						return 0;
+					} else if (block.inode[j].direct[k] > 0) {
+						bitmap[block.inode[j].direct[k]] = 1;
+					}
+				}
+
+				if (block.inode[j].indirect >= super.nblocks) {
+					return 0;
+				} else if (block.inode[j].indirect > 0) {
+					bitmap[block.inode[j].indirect] = 1;
+
+					union fs_block indirect_block;
+					disk->read(block.inode[j].indirect, indirect_block.data);
+
+					for (int k = 0; k < POINTERS_PER_BLOCK; k++) {
+						if (indirect_block.pointers[k] >= super.nblocks) {
+							return 0;
+						} else if (indirect_block.pointers[k] > 0) {
+							bitmap[indirect_block.pointers[k]] = 1;
+						}
+					}
+				}
+			}
+		}
+	}
+
+	mounted = true;
+
+	return 1;
 }
 
 int INE5412_FS::fs_create()
