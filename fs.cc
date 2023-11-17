@@ -278,7 +278,22 @@ int INE5412_FS::fs_delete(int inumber)
 
 int INE5412_FS::fs_getsize(int inumber)
 {
-	return -1;
+	// Retorna o tamanho lógico do inodo especificado, em bytes. Note que zero é um tamanho lógico
+	// válido para um inodo! Em caso de falha, retorna -1.
+
+	if (!mounted) {
+		return -1;
+	}
+
+	union fs_block block;
+
+	disk->read(0, block.data);
+
+	fs_inode inode;
+
+	if (!load_inode(inumber, &inode)) return -1;
+
+	return inode.size;
 }
 
 int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
