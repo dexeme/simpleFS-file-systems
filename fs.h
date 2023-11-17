@@ -53,10 +53,12 @@ public:
     int  fs_read(int inumber, char *data, int length, int offset);
     int  fs_write(int inumber, const char *data, int length, int offset);
 
+    int load_inode(int inumber, fs_inode *inode);
+    int save_inode(int inumber, fs_inode *inode);
 private:
     Disk *disk;
     bool mounted = false;
-    //std::vector<int> bitmap;
+    std::vector<int> bitmap = std::vector<int>(1);
 };
 
 #endif
