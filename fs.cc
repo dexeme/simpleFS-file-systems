@@ -298,7 +298,167 @@ int INE5412_FS::fs_getsize(int inumber)
 
 int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
 {
-	return 0;
+	/*
+	fs read – Lê dado de um inodo válido. Copia “length” bytes do inodo para dentro do ponteiro “data”,
+	começando em “offset” no inodo. Retorna o número total de bytes lidos. O Número de bytes efetivamente
+	lidos pode ser menos que o número de bytes requisitados, caso o fim do inodo seja alcançado. Se o inúmero
+	dado for inválido, ou algum outro erro for encontrado, retorna 0.
+	*/
+	
+	if (!mounted) {
+		return 0;
+	}
+
+	union fs_block block;
+
+	disk->read(0, block.data);
+
+	fs_inode inode;
+
+	if (!load_inode(inumber, &inode)) return 0;
+
+	if (offset >= inode.size) return 0;
+	else if (offset + length > inode.size) length = inode.size - offset;
+
+	// Ponteiro auxiliar para caminhar no buffer
+	char * p_aux = data;
+
+	// Variável para armazenar quantos bytes ainda tem pra ler
+	int bytes_left = length;
+
+	// Variável para armazenar quantos bytes já foram lidos
+	int bytes_read = 0;
+
+	// Se o offset estiver dentro dos blocos diretos
+	if (offset < POINTERS_PER_INODE * Disk::DISK_BLOCK_SIZE) {
+		// Calcula o bloco inicial
+		int block_index = offset / Disk::DISK_BLOCK_SIZE;
+		// Calcula o offset inicial dentro do bloco
+		int block_offset = offset % Disk::DISK_BLOCK_SIZE;
+
+		// Se o bloco direto estiver vazio, retorna 0
+		if (inode.direct[block_index] == 0) return 0;
+
+		// Lê o bloco direto
+		disk->read(inode.direct[block_index], block.data);
+
+		// Para cada byte que falta ler, ou até acabar o bloco, copia o byte do bloco para o buffer
+		for (int i = 0; i < bytes_left && i < Disk::DISK_BLOCK_SIZE - block_offset; i++) {
+			*p_aux = block.data[block_offset + i];
+			p_aux++;
+		}
+		bytes_left -= i;
+		bytes_read += i;
+
+		// Enquanto ainda tiver bytes para ler, lê os blocos diretos
+		while (bytes_left > 0 && block_index + 1 < POINTERS_PER_INODE) {
+			// Incrementa o bloco
+			block_index++;
+
+			// Se o bloco direto estiver vazio, retorna 0
+			if (inode.direct[block_index] == 0) return 0;
+
+			// Lê o bloco direto
+			disk->read(inode.direct[block_index], block.data);
+
+			// Para cada byte que falta ler, ou até acabar o bloco, copia o byte do bloco para o buffer
+			for (int i = 0; i < bytes_left && i < Disk::DISK_BLOCK_SIZE; i++) {
+				*p_aux = block.data[i];
+				p_aux++;
+			}
+			bytes_left -= i;
+			bytes_read += i;
+		}
+
+		// Se ainda tiver bytes para ler, lê o bloco indireto
+		if (bytes_left > 0) {
+			// Se o bloco indireto estiver vazio, retorna 0
+			if (inode.indirect == 0) return 0;
+
+			// Lê o bloco indireto
+			union fs_block indirect_block;
+			disk->read(inode.indirect, indirect_block.data);
+
+			// Reseta o bloco inicial
+			block_index = 0;
+
+			// Enquanto ainda tiver bytes para ler, lê os blocos diretos
+			while (bytes_left > 0 && block_index < POINTERS_PER_BLOCK) {
+			
+				// Se o bloco direto estiver vazio, retorna 0
+				if (indirect_block.pointers[block_index] == 0) return 0;
+
+				// Lê o bloco direto
+				disk->read(indirect_block.pointers[block_index], block.data);
+
+				// Para cada byte que falta ler, ou até acabar o bloco, copia o byte do bloco para o buffer
+				for (int i = 0; i < bytes_left && i < Disk::DISK_BLOCK_SIZE; i++) {
+					*p_aux = block.data[i];
+					p_aux++;
+				}
+				bytes_left -= i;
+				bytes_read += i;
+
+				// Incrementa o bloco
+				block_index++;
+			}
+
+			// Se ainda tiver bytes para ler, retorna o número de bytes lidos, pois chegou ao fim do inodo
+			if (bytes_left > 0) return bytes_read;
+		}
+	} else {
+		// Se o offset estiver dentro dos blocos indiretos
+		// Se o bloco indireto estiver vazio, retorna 0
+		if (inode.indirect == 0) return 0;
+
+		// Calcula o bloco inicial
+		int block_index = (offset - POINTERS_PER_INODE * Disk::DISK_BLOCK_SIZE) / Disk::DISK_BLOCK_SIZE;
+		// Calcula o offset inicial dentro do bloco
+		int block_offset = (offset - POINTERS_PER_INODE * Disk::DISK_BLOCK_SIZE) % Disk::DISK_BLOCK_SIZE;
+
+		// Lê o bloco indireto
+		union fs_block indirect_block;
+		disk->read(inode.indirect, indirect_block.data);
+
+		// Se o bloco inicial estiver vazio, retorna 0
+		if (indirect_block.pointers[block_index] == 0) return 0;
+
+		// Lê o bloco inicial
+		disk->read(indirect_block.pointers[block_index], block.data);
+
+		// Para cada byte que falta ler, ou até acabar o bloco, copia o byte do bloco para o buffer
+		for (int i = 0; i < bytes_left && i < Disk::DISK_BLOCK_SIZE - block_offset; i++) {
+			*p_aux = block.data[block_offset + i];
+			p_aux++;
+		}
+		bytes_left -= i;
+		bytes_read += i;
+
+		// Enquanto ainda tiver bytes para ler, lê os blocos diretos
+		while (bytes_left > 0 && block_index + 1 < POINTERS_PER_BLOCK) {
+			// Incrementa o bloco
+			block_index++;
+
+			// Se o bloco direto estiver vazio, retorna 0
+			if (indirect_block.pointers[block_index] == 0) return 0;
+
+			// Lê o bloco direto
+			disk->read(indirect_block.pointers[block_index], block.data);
+
+			// Para cada byte que falta ler, ou até acabar o bloco, copia o byte do bloco para o buffer
+			for (int i = 0; i < bytes_left && i < Disk::DISK_BLOCK_SIZE; i++) {
+				*p_aux = block.data[i];
+				p_aux++;
+			}
+			bytes_left -= i;
+			bytes_read += i;
+		}
+
+		// Se ainda tiver bytes para ler, retorna bytes_read, pois chegou ao fim do inodo
+		if (bytes_left > 0) return bytes_read;
+	}
+
+	return bytes_read;
 }
 
 int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
