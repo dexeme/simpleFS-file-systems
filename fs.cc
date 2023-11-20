@@ -317,7 +317,7 @@ int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
 
 	if (!load_inode(inumber, &inode)) return 0;
 
-	if (offset >= inode.size) return 0;
+	if (offset >= inode.size || offset < 0) return 0;
 	else if (offset + length > inode.size) length = inode.size - offset;
 
 	// Ponteiro auxiliar para caminhar no buffer
