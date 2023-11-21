@@ -135,6 +135,12 @@ int INE5412_FS::fs_mount()
 		}
 	}
 
+	// Marca o superbloco e os blocos ocupados pelos inodes como ocupados
+	bitmap[0] = 1;
+	for (int i = 1; i <= super.ninodeblocks; i++) {
+		bitmap[i] = 1;
+	}
+
 	// Print bitmap
 	for (int i = 0; i < super.nblocks; i++) {
 		cout << bitmap[i];
@@ -254,13 +260,20 @@ int INE5412_FS::fs_delete(int inumber)
 	inode.size = 0;
 
 	for (int i = 0; i < POINTERS_PER_INODE; i++) {
-		bitmap[inode.direct[i]] = 0;
-		inode.direct[i] = 0;
+		cout << i << "<->" << inode.direct[i] << "\n";
+		if (inode.direct[i] > 0) {
+			bitmap[inode.direct[i]] = 0;
+			inode.direct[i] = 0;
+		}
+	}
+
+	if (bitmap[0] == 0) {
+		cout << "FIRST bitmap[0] == 0" << "\n";
 	}
 
 	if (inode.indirect > 0) {
 		bitmap[inode.indirect] = 0;
-		inode.indirect = 0;
+		
 
 		union fs_block indirect_block;
 		disk->read(inode.indirect, indirect_block.data);
@@ -269,6 +282,12 @@ int INE5412_FS::fs_delete(int inumber)
 			bitmap[indirect_block.pointers[i]] = 0;
 			indirect_block.pointers[i] = 0;
 		}
+
+		inode.indirect = 0;
+	}
+
+	if (bitmap[0] == 0) {
+		cout << "SECOND bitmap[0] == 0" << "\n";
 	}
 
 	save_inode(inumber, &inode);
@@ -308,10 +327,13 @@ int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
 	if (!mounted) {
 		return 0;
 	}
+	std::cout << "fs_read\n";
+	std::cout << "inumber: " << inumber << "\n";
+	std::cout << "length: " << length << "\n";
+	std::cout << "offset: " << offset << "\n";
+
 
 	union fs_block block;
-
-	disk->read(0, block.data);
 
 	fs_inode inode;
 
@@ -325,53 +347,67 @@ int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
 
 	// Variável para armazenar quantos bytes ainda tem pra ler
 	int bytes_left = length;
+	std::cout << "bytes_left (INICIAL): " << bytes_left << "\n";
 
 	// Variável para armazenar quantos bytes já foram lidos
 	int bytes_read = 0;
 
 	// Se o offset estiver dentro dos blocos diretos
 	if (offset < POINTERS_PER_INODE * Disk::DISK_BLOCK_SIZE) {
+		cout << "offset dentro dos blocos diretos"<< "\n";
 		// Calcula o bloco inicial
 		int block_index = offset / Disk::DISK_BLOCK_SIZE;
+
+		cout << "block_index: " << block_index << "\n";
 		// Calcula o offset inicial dentro do bloco
 		int block_offset = offset % Disk::DISK_BLOCK_SIZE;
 
-		// Se o bloco direto estiver vazio, retorna 0
+		cout << "block_offset: " << block_offset << "\n";
+
+		// Se o bloco estiver vazio, retorna 0
 		if (inode.direct[block_index] == 0) return 0;
 
 		// Lê o bloco direto
 		disk->read(inode.direct[block_index], block.data);
-
+		
+		int i = 0;
 		// Para cada byte que falta ler, ou até acabar o bloco, copia o byte do bloco para o buffer
-		for (int i = 0; i < bytes_left && i < Disk::DISK_BLOCK_SIZE - block_offset; i++) {
+		while (i < bytes_left && i < Disk::DISK_BLOCK_SIZE - block_offset) {
 			*p_aux = block.data[block_offset + i];
 			p_aux++;
+			i++;
 		}
-		bytes_left -= i;
-		bytes_read += i;
+		
+		bytes_left = bytes_left - i;
+		bytes_read = bytes_read + i;
+
+		cout << "bytes_read after block "<< block_index << ": " << bytes_read << "\n";
 
 		// Enquanto ainda tiver bytes para ler, lê os blocos diretos
-		while (bytes_left > 0 && block_index + 1 < POINTERS_PER_INODE) {
+		while (bytes_left > 0 && block_index + 1 < POINTERS_PER_INODE && inode.direct[block_index + 1] > 0) {
 			// Incrementa o bloco
 			block_index++;
 
-			// Se o bloco direto estiver vazio, retorna 0
-			if (inode.direct[block_index] == 0) return 0;
-
 			// Lê o bloco direto
 			disk->read(inode.direct[block_index], block.data);
-
+			
+			cout << "bytes_left before block " << block_index << ": " << bytes_left << "\n";	
+			int i = 0;
 			// Para cada byte que falta ler, ou até acabar o bloco, copia o byte do bloco para o buffer
-			for (int i = 0; i < bytes_left && i < Disk::DISK_BLOCK_SIZE; i++) {
+			while (i < bytes_left && i < Disk::DISK_BLOCK_SIZE) {
 				*p_aux = block.data[i];
 				p_aux++;
+				i++;
 			}
-			bytes_left -= i;
-			bytes_read += i;
+			bytes_left = bytes_left - i;
+			bytes_read = bytes_read + i;
+			cout << "bytes_read after block "<< block_index << ": " << bytes_read << "\n";
 		}
 
 		// Se ainda tiver bytes para ler, lê o bloco indireto
 		if (bytes_left > 0) {
+
+			cout << "Ainda tem bytes pra ler, lê o bloco indireto" << "\n";
 			// Se o bloco indireto estiver vazio, retorna 0
 			if (inode.indirect == 0) return 0;
 
@@ -385,83 +421,385 @@ int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
 			// Enquanto ainda tiver bytes para ler, lê os blocos diretos
 			while (bytes_left > 0 && block_index < POINTERS_PER_BLOCK) {
 			
-				// Se o bloco direto estiver vazio, retorna 0
-				if (indirect_block.pointers[block_index] == 0) return 0;
-
 				// Lê o bloco direto
 				disk->read(indirect_block.pointers[block_index], block.data);
 
+				int i = 0;
 				// Para cada byte que falta ler, ou até acabar o bloco, copia o byte do bloco para o buffer
-				for (int i = 0; i < bytes_left && i < Disk::DISK_BLOCK_SIZE; i++) {
+				while(i < bytes_left && i < Disk::DISK_BLOCK_SIZE) {
 					*p_aux = block.data[i];
 					p_aux++;
+					i++;
 				}
-				bytes_left -= i;
-				bytes_read += i;
+				bytes_left = bytes_left - i;
+				bytes_read = bytes_read + i;
+				cout << "bytes_read after indirect block "<< block_index << ": " << bytes_read << "\n";
 
 				// Incrementa o bloco
 				block_index++;
+
 			}
 
 			// Se ainda tiver bytes para ler, retorna o número de bytes lidos, pois chegou ao fim do inodo
 			if (bytes_left > 0) return bytes_read;
 		}
 	} else {
+		cout << "offset fora dos blocos diretos"<< "\n";
 		// Se o offset estiver dentro dos blocos indiretos
-		// Se o bloco indireto estiver vazio, retorna 0
-		if (inode.indirect == 0) return 0;
 
 		// Calcula o bloco inicial
 		int block_index = (offset - POINTERS_PER_INODE * Disk::DISK_BLOCK_SIZE) / Disk::DISK_BLOCK_SIZE;
-		// Calcula o offset inicial dentro do bloco
-		int block_offset = (offset - POINTERS_PER_INODE * Disk::DISK_BLOCK_SIZE) % Disk::DISK_BLOCK_SIZE;
 
 		// Lê o bloco indireto
 		union fs_block indirect_block;
 		disk->read(inode.indirect, indirect_block.data);
 
-		// Se o bloco inicial estiver vazio, retorna 0
-		if (indirect_block.pointers[block_index] == 0) return 0;
-
 		// Lê o bloco inicial
 		disk->read(indirect_block.pointers[block_index], block.data);
 
+		int i = 0;
 		// Para cada byte que falta ler, ou até acabar o bloco, copia o byte do bloco para o buffer
-		for (int i = 0; i < bytes_left && i < Disk::DISK_BLOCK_SIZE - block_offset; i++) {
-			*p_aux = block.data[block_offset + i];
+		while(i < bytes_left && i < Disk::DISK_BLOCK_SIZE) {
+			*p_aux = block.data[i];
 			p_aux++;
+			i++;
 		}
-		bytes_left -= i;
-		bytes_read += i;
+		bytes_left = bytes_left - i;
+		bytes_read = bytes_read + i;
 
+		cout << "bytes_read after indirect block "<< block_index << ": " << bytes_read << "\n";
 		// Enquanto ainda tiver bytes para ler, lê os blocos diretos
 		while (bytes_left > 0 && block_index + 1 < POINTERS_PER_BLOCK) {
 			// Incrementa o bloco
 			block_index++;
 
-			// Se o bloco direto estiver vazio, retorna 0
-			if (indirect_block.pointers[block_index] == 0) return 0;
-
 			// Lê o bloco direto
 			disk->read(indirect_block.pointers[block_index], block.data);
 
+			int i = 0;
 			// Para cada byte que falta ler, ou até acabar o bloco, copia o byte do bloco para o buffer
-			for (int i = 0; i < bytes_left && i < Disk::DISK_BLOCK_SIZE; i++) {
+			while(i < bytes_left && i < Disk::DISK_BLOCK_SIZE) {
 				*p_aux = block.data[i];
 				p_aux++;
+				i++;
 			}
-			bytes_left -= i;
-			bytes_read += i;
-		}
+			bytes_left = bytes_left - i;
+			bytes_read = bytes_read + i;
 
+			cout << "bytes_read after indirect block "<< block_index << ": " << bytes_read << "\n";
+		}
+	std::cout << "bytes_left (FINAL): " << bytes_left << "\n";
+	std::cout << "bytes_read: " << bytes_read << "\n";
 		// Se ainda tiver bytes para ler, retorna bytes_read, pois chegou ao fim do inodo
 		if (bytes_left > 0) return bytes_read;
 	}
-
 	return bytes_read;
 }
 
 int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 {
-	return 0;
+	/*
+	fs write – Escreve dado para um inodo válido. Copia “length” bytes do ponteiro “data” para o inodo
+	começando em “offset” bytes. Aloca quaisquer blocos diretos e indiretos no processo. Retorna o número 
+	de bytes efetivamente escritos. O número de bytes efetivamente escritos pode ser menor que o número de 
+	bytes requisitados, caso o disco se torne cheio. Se o inúmero dado for inválido, ou qualquer outro erro for 
+	encontrado, retorna 0.
+	*/
+	 
+	if (!mounted) {
+		return 0;
+	}
+	cout << "bitmap before: "<< "\n";
+	// Print bitmap
+	for (int i = 0; i < static_cast<int>(bitmap.size()); i++) {
+		cout << bitmap[i];
+	}
+	cout << "\n";
+	union fs_block block;
+
+	fs_inode inode;
+
+	if (!load_inode(inumber, &inode)) return 0;
+
+	if (offset < 0) return 0;
+
+	// Ponteiro auxiliar para caminhar no buffer
+	const char * p_aux = data;
+
+	// Variável para armazenar quantos bytes ainda tem pra escrever
+	int bytes_left = length;
+
+	// Variável para armazenar quantos bytes já foram escritos
+	int bytes_written = 0;
+
+	// Se o offset estiver dentro dos blocos diretos
+	if (offset < POINTERS_PER_INODE * Disk::DISK_BLOCK_SIZE) {
+
+		cout << "offset dentro dos blocos diretos"<< "\n";
+		// Calcula o bloco inicial
+		int block_index = offset / Disk::DISK_BLOCK_SIZE;
+
+		cout << "block_index: " << block_index << "\n";
+
+		// Calcula o offset inicial dentro do bloco
+		int block_offset = offset % Disk::DISK_BLOCK_SIZE;
+
+		cout << "block_offset: " << block_offset << "\n";
+
+		// Se o bloco estiver vazio, aloca um novo bloco
+		if (inode.direct[block_index] == 0) {
+			int new_block = 0;
+			for (int i = 0; i < static_cast<int>(bitmap.size()); i++) {
+				if (bitmap[i] == 0) {
+					new_block = i;
+					bitmap[i] = 1;
+					break;
+				}
+			}
+			if (new_block == 0) return bytes_written; // Disco cheio
+			inode.direct[block_index] = new_block;
+		}
+
+		// Lê o bloco direto
+		disk->read(inode.direct[block_index], block.data);
+
+		int i = 0;
+		// Para cada byte que falta escrever, ou até acabar o bloco, copia o byte do buffer para o bloco
+		while (i < bytes_left && i < Disk::DISK_BLOCK_SIZE - block_offset) {
+			block.data[block_offset + i] = *p_aux;
+			p_aux++;
+			i++;
+		}
+
+		bytes_left = bytes_left - i;
+		bytes_written = bytes_written + i;
+
+		cout << "bytes_written after block "<< block_index << ": " << bytes_written << "\n";
+
+		// Escreve o bloco direto
+		disk->write(inode.direct[block_index], block.data);
+
+		// Enquanto ainda tiver bytes para escrever, aloca novos blocos diretos
+		while (bytes_left > 0 && block_index + 1 < POINTERS_PER_INODE) {
+			// Incrementa o bloco
+			block_index++;
+
+			// Se o bloco estiver vazio, aloca um novo bloco
+			if (inode.direct[block_index] == 0) {
+				int new_block = 0;
+				for (int i = 0; i < static_cast<int>(bitmap.size()); i++) {
+					if (bitmap[i] == 0) {
+						new_block = i;
+						bitmap[i] = 1;
+						break;
+					}
+				}
+				if (new_block == 0) return bytes_written; // Disco cheio
+				inode.direct[block_index] = new_block;
+			}
+			cout << "bloco direto alocado: " << block_index << "<->" <<inode.direct[block_index] << "\n";
+
+			// Lê o bloco direto
+			disk->read(inode.direct[block_index], block.data);
+
+			int i = 0;
+			// Para cada byte que falta escrever, ou até acabar o bloco, copia o byte do buffer para o bloco
+			while (i < bytes_left && i < Disk::DISK_BLOCK_SIZE) {
+				block.data[i] = *p_aux;
+				p_aux++;
+				i++;
+			}
+
+			bytes_left = bytes_left - i;
+			bytes_written = bytes_written + i;
+
+			// Escreve o bloco direto
+			disk->write(inode.direct[block_index], block.data);
+
+			cout << "bytes_written after block "<< block_index << ": " << bytes_written << "\n";
+		}
+
+		// Se ainda tiver bytes para escrever, aloca um bloco indireto
+		if (bytes_left > 0) {
+			cout << "Ainda tem bytes pra escrever, aloca um bloco indireto" << "\n";
+			
+			cout << "bitmap before trying to allocate indirect block: "<< "\n";
+
+			// Print bitmap
+			for (int i = 0; i < static_cast<int>(bitmap.size()); i++) {
+				cout << bitmap[i];
+			}
+			cout << "\n";
+			// Se o bloco indireto estiver vazio, aloca um novo bloco
+			if (inode.indirect == 0) {
+				int new_block = 0;
+				for (int i = 0; i < static_cast<int>(bitmap.size()); i++) {
+					if (bitmap[i] == 0) {
+						new_block = i;
+						bitmap[i] = 1;
+						break;
+					}
+				}
+				if (new_block == 0) return bytes_written; // Disco cheio
+				inode.indirect = new_block;
+			}
+			cout << "bloco indireto: " << inode.indirect << "\n";
+
+			// Lê o bloco indireto
+			union fs_block indirect_block;
+			disk->read(inode.indirect, indirect_block.data);
+
+			// Reseta o bloco inicial
+			block_index = 0;
+
+			// Enquanto ainda tiver bytes para escrever, aloca novos blocos diretos
+			while (bytes_left > 0 && block_index < POINTERS_PER_BLOCK) {
+	
+				// Se o bloco estiver vazio, aloca um novo bloco
+				if (indirect_block.pointers[block_index] == 0) {
+					int new_block = 0;
+					for (int i = 0; i < static_cast<int>(bitmap.size()); i++) {
+						if (bitmap[i] == 0) {
+							new_block = i;
+							bitmap[i] = 1;
+							break;
+						}
+					}
+					if (new_block == 0) return bytes_written; // Disco cheio
+					indirect_block.pointers[block_index] = new_block;
+				}
+				cout << "bloco direto alocado no bloco indireto: " << indirect_block.pointers[block_index] << "\n";
+
+				// Lê o bloco direto
+				disk->read(indirect_block.pointers[block_index], block.data);
+
+				int i = 0;
+				// Para cada byte que falta escrever, ou até acabar o bloco, copia o byte do buffer para o bloco
+				while (i < bytes_left && i < Disk::DISK_BLOCK_SIZE) {
+					block.data[i] = *p_aux;
+					p_aux++;
+					i++;
+				}
+
+				bytes_left = bytes_left - i;
+				bytes_written = bytes_written + i;
+
+				// Escreve o bloco direto
+				disk->write(indirect_block.pointers[block_index], block.data);
+
+				cout << "bytes_written after indirect block "<< block_index << ": " << bytes_written << "\n";
+				// Incrementa o bloco
+				block_index++;
+
+			}
+
+			// Escreve o bloco indireto
+			disk->write(inode.indirect, indirect_block.data);
+
+			// Se ainda tiver bytes para escrever, retorna o número de bytes escritos, pois chegou ao fim do inodo
+			if (bytes_left > 0) return bytes_written;
+		}
+	} else {
+		// Se o offset estiver dentro dos blocos indiretos
+		cout << "offset fora dos blocos diretos"<< "\n";
+		// Calcula o bloco inicial
+		int block_index = (offset - POINTERS_PER_INODE * Disk::DISK_BLOCK_SIZE) / Disk::DISK_BLOCK_SIZE;
+
+		// Lê o bloco indireto
+		union fs_block indirect_block;
+		disk->read(inode.indirect, indirect_block.data);
+
+		// Se o bloco estiver vazio, aloca um novo bloco
+		if (indirect_block.pointers[block_index] == 0) {
+			int new_block = 0;
+			for (int i = 0; i < static_cast<int>(bitmap.size()); i++) {
+				if (bitmap[i] == 0) {
+					new_block = i;
+					bitmap[i] = 1;
+					break;
+				}
+			}
+			if (new_block == 0) return bytes_written;
+			indirect_block.pointers[block_index] = new_block;
+		}
+
+		// Lê o bloco inicial
+		disk->read(indirect_block.pointers[block_index], block.data);
+
+		int i = 0;
+		// Para cada byte que falta escrever, ou até acabar o bloco, copia o byte do buffer para o bloco
+		while (i < bytes_left && i < Disk::DISK_BLOCK_SIZE) {
+			block.data[i] = *p_aux;
+			p_aux++;
+			i++;
+		}
+
+		bytes_left = bytes_left - i;
+		bytes_written = bytes_written + i;
+
+		// Escreve o bloco inicial
+		disk->write(indirect_block.pointers[block_index], block.data);
+
+		cout << "bytes_written after indirect block "<< block_index << ": " << bytes_written << "\n";
+		// Enquanto ainda tiver bytes para escrever, aloca novos blocos diretos
+		while (bytes_left > 0 && block_index + 1 < POINTERS_PER_BLOCK) {
+			// Incrementa o bloco
+			block_index++;
+
+			// Se o bloco estiver vazio, aloca um novo bloco
+			if (indirect_block.pointers[block_index] == 0) {
+				int new_block = 0;
+				for (int i = 0; i < static_cast<int>(bitmap.size()); i++) {
+					if (bitmap[i] == 0) {
+						new_block = i;
+						bitmap[i] = 1;
+						break;
+					}
+				}
+
+				if (new_block == 0) return bytes_written;
+				indirect_block.pointers[block_index] = new_block;
+			}
+
+			// Lê o bloco direto
+			disk->read(indirect_block.pointers[block_index], block.data);
+
+			int i = 0;
+			// Para cada byte que falta escrever, ou até acabar o bloco, copia o byte do buffer para o bloco
+			while (i < bytes_left && i < Disk::DISK_BLOCK_SIZE) {
+				block.data[i] = *p_aux;
+				p_aux++;
+				i++;
+			}
+
+			bytes_left = bytes_left - i;
+			bytes_written = bytes_written + i;
+
+			// Escreve o bloco direto
+			disk->write(indirect_block.pointers[block_index], block.data);
+
+			cout << "bytes_written after indirect block "<< block_index << ": " << bytes_written << "\n";
+		}
+
+		// Escreve o bloco indireto
+		disk->write(inode.indirect, indirect_block.data);
+
+		// Se ainda tiver bytes para escrever, retorna bytes_written, pois chegou ao fim do inodo
+		if (bytes_left > 0) return bytes_written;
+	}
+
+	// Atualiza o tamanho do inodo
+	if (offset + length > inode.size) inode.size = offset + length;
+
+	// Salva o inodo
+	save_inode(inumber, &inode);
+
+	cout << "bitmap after: "<< "\n";
+
+	// Print bitmap
+	for (int i = 0; i < static_cast<int>(bitmap.size()); i++) {
+		cout << bitmap[i];
+	}
+	cout << "\n";
+	return bytes_written;
 }
