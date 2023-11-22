@@ -19,13 +19,15 @@ int INE5412_FS::fs_format()
 	// Escreve o superbloco
 	disk->write(0, block.data);
 
-	// Zera o resto do disco
-	for (int i = 1; i < block.super.nblocks; i++) {
-		for (int j = 0; j < POINTERS_PER_BLOCK; j++) {
-			block.pointers[j] = 0;
-		}
+	fs_superblock super = block.super;
+	// Zera block
+	for (int i = 0; i < POINTERS_PER_BLOCK; i++) {
+		block.pointers[i] = 0;
 	}
-
+	// Zera o resto do disco
+	for (int i = 1; i < super.nblocks; i++) {
+		disk->write(i, block.data);
+	}
 	return 1;
 }
 
@@ -78,6 +80,14 @@ void INE5412_FS::fs_debug()
 
 			inode_num++;
 		}
+	}
+
+	if (mounted) {
+		cout << "bitmap:\n";
+		for (int i = 0; i < super.nblocks; i++) {
+			cout << bitmap[i];
+		}
+		cout << "\n";
 	}
 }
 
@@ -279,8 +289,10 @@ int INE5412_FS::fs_delete(int inumber)
 		disk->read(inode.indirect, indirect_block.data);
 
 		for (int i = 0; i < POINTERS_PER_BLOCK; i++) {
-			bitmap[indirect_block.pointers[i]] = 0;
-			indirect_block.pointers[i] = 0;
+			if (indirect_block.pointers[i] > 0) {
+				bitmap[indirect_block.pointers[i]] = 0;
+				indirect_block.pointers[i] = 0;
+			}
 		}
 
 		inode.indirect = 0;
@@ -519,6 +531,10 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 
 	fs_inode inode;
 
+	cout << "inumber: " << inumber << "\n";
+	cout << "length: " << length << "\n";
+	cout << "offset: " << offset << "\n";
+
 	if (!load_inode(inumber, &inode)) return 0;
 
 	if (offset < 0) return 0;
@@ -559,6 +575,7 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 			if (new_block == 0) return bytes_written; // Disco cheio
 			inode.direct[block_index] = new_block;
 		}
+		cout << "bloco direto alocado: " << block_index << "<->" <<inode.direct[block_index] << "\n";
 
 		// Lê o bloco direto
 		disk->read(inode.direct[block_index], block.data);
@@ -578,6 +595,12 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 
 		// Escreve o bloco direto
 		disk->write(inode.direct[block_index], block.data);
+
+		// Atualiza o tamanho do inodo
+		if (offset + bytes_written > inode.size) inode.size = offset + bytes_written;
+
+		// Salva o inodo
+		save_inode(inumber, &inode);
 
 		// Enquanto ainda tiver bytes para escrever, aloca novos blocos diretos
 		while (bytes_left > 0 && block_index + 1 < POINTERS_PER_INODE) {
@@ -616,6 +639,12 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 			// Escreve o bloco direto
 			disk->write(inode.direct[block_index], block.data);
 
+			// Atualiza o tamanho do inodo
+			if (offset + bytes_written > inode.size) inode.size = offset + bytes_written;
+
+			// Salva o inodo
+			save_inode(inumber, &inode);
+
 			cout << "bytes_written after block "<< block_index << ": " << bytes_written << "\n";
 		}
 
@@ -651,6 +680,13 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 
 			// Reseta o bloco inicial
 			block_index = 0;
+
+			// Atualiza o tamanho do inodo
+			if (offset + bytes_written > inode.size) inode.size = offset + bytes_written;
+
+
+			// Salva o inodo
+			save_inode(inumber, &inode);
 
 			// Enquanto ainda tiver bytes para escrever, aloca novos blocos diretos
 			while (bytes_left > 0 && block_index < POINTERS_PER_BLOCK) {
@@ -788,8 +824,9 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 		if (bytes_left > 0) return bytes_written;
 	}
 
+	cout << "if " << offset << " + " << length << " > " << inode.size << " then inode.size = " << offset << " + " << length << "\n";
 	// Atualiza o tamanho do inodo
-	if (offset + length > inode.size) inode.size = offset + length;
+	if (offset + bytes_written > inode.size) inode.size = offset + bytes_written;
 
 	// Salva o inodo
 	save_inode(inumber, &inode);
