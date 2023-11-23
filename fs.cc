@@ -3,7 +3,7 @@
 
 int INE5412_FS::fs_format()
 {
-	// TODO: Se o disco já foi montado não pode formatar, retorna falha
+	// Se o disco já foi montado não pode formatar, retorna falha
 	if (mounted) {
 		return 0;
 	}
@@ -103,7 +103,6 @@ int INE5412_FS::fs_mount()
 
 	if (block.super.magic != FS_MAGIC) return 0;
 	if (block.super.nblocks != disk->size()) return 0;
-	//if (block.super.ninodeblocks != ceil(block.super.nblocks * 0.1)) return 0; Isso daqui não funciona pros discos 20 e 200 pois eles não seguem a regra dos 10%
 	if (block.super.ninodes != block.super.ninodeblocks * INODES_PER_BLOCK) return 0;
 
 	bitmap.resize(block.super.nblocks);
@@ -197,31 +196,44 @@ int INE5412_FS::fs_create()
 
 int INE5412_FS::load_inode(int inumber, fs_inode *inode)
 {
+	/* Essa função carrega o inode indicado pelo inúmero para o ponteiro inode. Retorna 1 em caso de
+	sucesso, e zero em caso de falha. */
+
 	if (!mounted) {
 		return 0;
 	}
 
+	// Inicia o bloco
 	union fs_block block;
 
+	// Lê o superbloco
 	disk->read(0, block.data);
-
 	fs_superblock super = block.super;
 
+	// Verifica se o inúmero é válido
 	if (inumber < 1 || inumber > super.ninodes) return 0;
 
+	// Calcula o bloco e o índice do inodo
 	int inode_block = ceil(inumber / INODES_PER_BLOCK) + 1;
 	int inode_index = (inumber - 1) % INODES_PER_BLOCK;
 
+	// Lê o bloco do inodo
 	disk->read(inode_block, block.data);
 
+	// Verifica se o inodo é válido
 	if (block.inode[inode_index].isvalid == 0) return 0;
 
+	// Copia o inodo para o ponteiro
 	*inode = block.inode[inode_index];
 
 	return 1;
 }
 
 int INE5412_FS::save_inode(int inumber, fs_inode *inode) {
+
+	/* Essa função é o oposto da anterior. Ela salva o inode indicado pelo inúmero. Retorna 1 em caso
+	de sucesso, e zero em caso de falha. */
+
 	if (!mounted) {
 		return 0;
 	}
@@ -250,25 +262,31 @@ int INE5412_FS::save_inode(int inumber, fs_inode *inode) {
 
 int INE5412_FS::fs_delete(int inumber)
 {
-	// Deleta o inodo indicado pelo inúmero. Libera todo o dado e blocos indiretos atribuı́dos a este
-    // inodo e os retorna ao mapa de blocos livres. Em caso de sucesso, retorna um. Em caso de falha, retorna
-    // 0.
-	
+
+		/* Essa função Deleta o inodo indicado pelo inúmero. Libera todo o dado e blocos indiretos atribuídos a este
+     inodo e os retorna ao mapa de blocos livres. Em caso de sucesso, retorna um. Em caso de falha, retorna 0. */
+
 	if (!mounted) {
 		return 0;
 	}
 
+	// Inicia o bloco
 	union fs_block block;
 
+	// Lê o superbloco
 	disk->read(0, block.data);
 
+	// Inicia o inodo
 	fs_inode inode;
 
+	// Carrega o inodo
 	if (!load_inode(inumber, &inode)) return 0;
 
+	// Libera o inodo
 	inode.isvalid = 0;
 	inode.size = 0;
 
+	// Libera os blocos diretos
 	for (int i = 0; i < POINTERS_PER_INODE; i++) {
 		if (inode.direct[i] > 0) {
 			bitmap[inode.direct[i]] = 0;
@@ -276,23 +294,27 @@ int INE5412_FS::fs_delete(int inumber)
 		}
 	}
 
+	// Libera o bloco indireto
 	if (inode.indirect > 0) {
 		bitmap[inode.indirect] = 0;
 		
-
+		// Lê o bloco indireto
 		union fs_block indirect_block;
 		disk->read(inode.indirect, indirect_block.data);
 
+		// Libera os blocos diretos
 		for (int i = 0; i < POINTERS_PER_BLOCK; i++) {
 			if (indirect_block.pointers[i] > 0) {
 				bitmap[indirect_block.pointers[i]] = 0;
 				indirect_block.pointers[i] = 0;
 			}
 		}
-
+		
+		// Escreve o bloco indireto
 		inode.indirect = 0;
 	}
 
+	// Salva o inodo
 	save_inode(inumber, &inode);
 
 	return 1;	
@@ -300,8 +322,10 @@ int INE5412_FS::fs_delete(int inumber)
 
 int INE5412_FS::fs_getsize(int inumber)
 {
-	// Retorna o tamanho lógico do inodo especificado, em bytes. Note que zero é um tamanho lógico
-	// válido para um inodo! Em caso de falha, retorna -1.
+
+	/* Essa função retorna o tamanho lógico do inodo especificado, em bytes. Note que zero é um tamanho lógico
+	válido para um inodo! Em caso de falha, retorna -1. */
+	
 
 	if (!mounted) {
 		return -1;
@@ -321,7 +345,7 @@ int INE5412_FS::fs_getsize(int inumber)
 int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
 {
 	/*
-	fs read – Lê dado de um inodo válido. Copia “length” bytes do inodo para dentro do ponteiro “data”,
+	Essa função lê dado de um inodo válido. Copia “length” bytes do inodo para dentro do ponteiro “data”,
 	começando em “offset” no inodo. Retorna o número total de bytes lidos. O Número de bytes efetivamente
 	lidos pode ser menos que o número de bytes requisitados, caso o fim do inodo seja alcançado. Se o inúmero
 	dado for inválido, ou algum outro erro for encontrado, retorna 0.
@@ -331,13 +355,15 @@ int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
 		return 0;
 	}
 
-
+	// Inicia o bloco
 	union fs_block block;
 
 	fs_inode inode;
 
+	// Carrega o inodo
 	if (!load_inode(inumber, &inode)) return 0;
 
+	// Verifica se o offset é válido
 	if (offset >= inode.size || offset < 0) return 0;
 	else if (offset + length > inode.size) length = inode.size - offset;
 
@@ -432,8 +458,8 @@ int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
 			if (bytes_left > 0) return bytes_read;
 		}
 	} else {
-		// Se o offset estiver dentro dos blocos indiretos
 
+		// Se o offset estiver dentro dos blocos indiretos:
 		// Calcula o bloco inicial
 		int block_index = (offset - POINTERS_PER_INODE * Disk::DISK_BLOCK_SIZE) / Disk::DISK_BLOCK_SIZE;
 
@@ -482,7 +508,7 @@ int INE5412_FS::fs_read(int inumber, char *data, int length, int offset)
 int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 {
 	/*
-	fs write – Escreve dado para um inodo válido. Copia “length” bytes do ponteiro “data” para o inodo
+	Essa função escreve dado para um inodo válido. Copia “length” bytes do ponteiro “data” para o inodo
 	começando em “offset” bytes. Aloca quaisquer blocos diretos e indiretos no processo. Retorna o número 
 	de bytes efetivamente escritos. O número de bytes efetivamente escritos pode ser menor que o número de 
 	bytes requisitados, caso o disco se torne cheio. Se o inúmero dado for inválido, ou qualquer outro erro for 
@@ -493,17 +519,21 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 		return 0;
 	}
 	std::cout << "bitmap before: "<< "\n";
-	// Print bitmap
+
+	// Printa o bitmap
 	for (int i = 0; i < static_cast<int>(bitmap.size()); i++) {
 		std::cout << bitmap[i];
 	}
 	std::cout << "\n";
 	union fs_block block;
 
+	// Inicia o inodo
 	fs_inode inode;
 
+	// Carrega o inodo
 	if (!load_inode(inumber, &inode)) return 0;
 
+	// Verifica se o offset é válido
 	if (offset < 0) return 0;
 
 	// Ponteiro auxiliar para caminhar no buffer
@@ -576,7 +606,8 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 						break;
 					}
 				}
-				if (new_block == 0) return bytes_written; // Disco cheio
+				// Disco cheio
+				if (new_block == 0) return bytes_written; 
 				inode.direct[block_index] = new_block;
 			}
 
@@ -591,6 +622,7 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 				i++;
 			}
 
+			// Atualiza o tamanho do inodo
 			bytes_left = bytes_left - i;
 			bytes_written = bytes_written + i;
 
@@ -617,7 +649,8 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 						break;
 					}
 				}
-				if (new_block == 0) return bytes_written; // Disco cheio
+				// Disco cheio
+				if (new_block == 0) return bytes_written; 
 				inode.indirect = new_block;
 			}
 			// Lê o bloco indireto
@@ -629,7 +662,6 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 
 			// Atualiza o tamanho do inodo
 			if (offset + bytes_written > inode.size) inode.size = offset + bytes_written;
-
 
 			// Salva o inodo
 			save_inode(inumber, &inode);
@@ -647,7 +679,8 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 							break;
 						}
 					}
-					if (new_block == 0) return bytes_written; // Disco cheio
+					 // Disco cheio
+					if (new_block == 0) return bytes_written;
 					indirect_block.pointers[block_index] = new_block;
 				}
 
@@ -662,6 +695,7 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 					i++;
 				}
 
+				// Atualiza o tamanho do inodo
 				bytes_left = bytes_left - i;
 				bytes_written = bytes_written + i;
 
@@ -697,6 +731,7 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 					break;
 				}
 			}
+			// Disco cheio
 			if (new_block == 0) return bytes_written;
 			indirect_block.pointers[block_index] = new_block;
 		}
@@ -705,6 +740,7 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 		disk->read(indirect_block.pointers[block_index], block.data);
 
 		int i = 0;
+
 		// Para cada byte que falta escrever, ou até acabar o bloco, copia o byte do buffer para o bloco
 		while (i < bytes_left && i < Disk::DISK_BLOCK_SIZE) {
 			block.data[i] = *p_aux;
@@ -772,7 +808,7 @@ int INE5412_FS::fs_write(int inumber, const char *data, int length, int offset)
 
 	std::cout << "bitmap after: "<< "\n";
 
-	// Print bitmap
+	// Printa o bitmap
 	for (int i = 0; i < static_cast<int>(bitmap.size()); i++) {
 		std::cout << bitmap[i];
 	}
