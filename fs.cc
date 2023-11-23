@@ -3,7 +3,11 @@
 
 int INE5412_FS::fs_format()
 {
-	// Se o disco já foi montado não pode formatar, retorna falha
+	/*
+	Essa função formata o disco. Ela deve escrever um superbloco válido, e marcar todos os blocos como
+	livres. Ela deve retornar 1 em caso de sucesso, e zero em caso de falha.
+	*/
+
 	if (mounted) {
 		return 0;
 	}
@@ -31,9 +35,16 @@ int INE5412_FS::fs_format()
 	return 1;
 }
 
-// A saída não está sendo que nem a do professor, mas não consigo encontrar erro no código!
 void INE5412_FS::fs_debug()
 {
+	/*
+	Essa função imprime informações sobre o sistema de arquivos. Ela deve imprimir o número de blocos
+	no disco, o número de blocos de inodes, o número de inodes, e o número de blocos livres. Ela também
+	deve imprimir informações sobre cada inode, incluindo o seu número, o seu tamanho, e os blocos de dados
+	que ele aponta. Imprime também o mapa de bits, um bit por bloco, indicando se o bloco está livre ou não.
+	*/
+
+	
 	union fs_block block;
 
 	disk->read(0, block.data);
@@ -93,6 +104,11 @@ void INE5412_FS::fs_debug()
 
 int INE5412_FS::fs_mount()
 {
+	/*
+	Essa função monta o sistema de arquivos. Ela verifica se o disco está formatado, e se está, carrega o
+	superbloco e o mapa de bits. Retorna 1 em caso de sucesso, e zero em caso de falha.
+	*/
+
 	if (mounted) {
 		return 0;
 	}
@@ -101,8 +117,11 @@ int INE5412_FS::fs_mount()
 
 	disk->read(0, block.data);
 
+	// Verifica se o disco está formatado
 	if (block.super.magic != FS_MAGIC) return 0;
+	// Verifica se o número de blocos está correto
 	if (block.super.nblocks != disk->size()) return 0;
+	// Verifica se o número de blocos de inodes está correto
 	if (block.super.ninodes != block.super.ninodeblocks * INODES_PER_BLOCK) return 0;
 
 	bitmap.resize(block.super.nblocks);
@@ -123,19 +142,22 @@ int INE5412_FS::fs_mount()
 						bitmap[block.inode[j].direct[k]] = 1;
 					}
 				}
-
+				// Se o bloco indireto estiver vazio, retorna 0
 				if (block.inode[j].indirect >= super.nblocks) {
 					return 0;
 				} else if (block.inode[j].indirect > 0) {
+					// Marca o bloco indireto como ocupado
 					bitmap[block.inode[j].indirect] = 1;
 
 					union fs_block indirect_block;
 					disk->read(block.inode[j].indirect, indirect_block.data);
-
+					// Marca os blocos diretos como ocupados
 					for (int k = 0; k < POINTERS_PER_BLOCK; k++) {
 						if (indirect_block.pointers[k] >= super.nblocks) {
+							// Se o bloco direto estiver vazio, retorna 0
 							return 0;
 						} else if (indirect_block.pointers[k] > 0) {
+							// Marca o bloco direto como ocupado
 							bitmap[indirect_block.pointers[k]] = 1;
 						}
 					}
@@ -156,6 +178,7 @@ int INE5412_FS::fs_mount()
 	}
 	std::cout << "\n";
 
+	// Seta o disco como montado
 	mounted = true;
 
 	return 1;
@@ -163,8 +186,10 @@ int INE5412_FS::fs_mount()
 
 int INE5412_FS::fs_create()
 {
-	// Cria um novo inodo de comprimento zero. Em caso de sucesso, retorna o inúmero (positivo). Em
-    // caso de falha, retorna zero. (Note que isto implica que zero não pode ser um inúmero válido.)
+	/*
+	Essa função cria um novo inodo de comprimento zero. Em caso de sucesso, retorna o inúmero (positivo). 
+	Em caso de falha, retorna zero. (Note que isto implica que zero não pode ser um inúmero válido.)
+	*/
 
 	if (!mounted) {
 		return 0;
@@ -244,9 +269,12 @@ int INE5412_FS::save_inode(int inumber, fs_inode *inode) {
 
 	fs_superblock super = block.super;
 
+	// Verifica se o inúmero é válido
 	if (inumber < 1 || inumber > super.ninodes) return 0;
 
+	// Calcula o bloco e o índice do inodo
 	int inode_block = ceil(inumber / INODES_PER_BLOCK) + 1;
+
 	int inode_index = (inumber - 1) % INODES_PER_BLOCK;
 
 	disk->read(inode_block, block.data);
